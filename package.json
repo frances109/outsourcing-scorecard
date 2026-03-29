@@ -1,0 +1,22 @@
+{
+  "name": "outsourcing-readiness-quiz",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev":   "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@emailjs/browser": "^4.4.1",
+    "bootstrap": "^5.3.3",
+    "bootstrap-icons": "^1.11.3",
+    "intl-tel-input": "^21.1.4",
+    "jspdf": "^2.5.1",
+    "jquery": "^3.7.1"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  }
+}
