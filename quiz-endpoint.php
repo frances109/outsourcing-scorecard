@@ -43,8 +43,8 @@ define('QUIZ_USER_BCC', '');   // optional
 // These appear as clickable buttons in the email the submitter receives.
 // Leave as '#' (default) or set to real landing/booking page URLs.
 
-define('QUIZ_CTA_SCHEDULE_URL', '#');   // URL for "Schedule Your Strategy Call" button
-define('QUIZ_CTA_CONSULT_URL',  '#');   // URL for "Book a Consultation" button
+define('QUIZ_CTA_REQUEST_CALL',  '#');   // URL for "Request for a Strategy Call" button
+define('QUIZ_CTA_CONSULT_PLAN',  '#');   // URL for "Book a Consultation" button
 
 // =============================================================================
 // END OF CONFIGURATION — do not edit below this line
@@ -111,14 +111,71 @@ function quiz_split_addresses( string $raw ): array {
 // ── Register REST route ───────────────────────────────────────────────────────
  
 add_action( 'rest_api_init', function () {
+    // Main submission endpoint (POST)
     register_rest_route( 'scorecard/v1', '/submit', [
         'methods'             => 'POST',
         'callback'            => 'quiz_handle_submission',
         'permission_callback' => '__return_true',
     ] );
+
+    // Email CTA click endpoint (GET) — triggered when user clicks a button in their results email.
+    // URL format: /wp-json/scorecard/v1/cta?action=schedule&email=...&name=...&company=...&tier=...&token=...
+    register_rest_route( 'scorecard/v1', '/cta', [
+        'methods'             => 'GET',
+        'callback'            => 'quiz_handle_email_cta',
+        'permission_callback' => '__return_true',
+    ] );
 } );
- 
- 
+
+
+// ── Email CTA click handler ───────────────────────────────────────────────────
+// Called when the user clicks a CTA button inside their results email.
+// Validates a signed token, sends the CTA email to admin, then redirects
+// the user to the appropriate page (QUIZ_CTA_REQUEST_CALL / QUIZ_CTA_CONSULT_PLAN).
+
+function quiz_handle_email_cta( WP_REST_Request $request ) {
+    $action  = sanitize_text_field( $request->get_param( 'action' )  ?? '' );
+    $email   = sanitize_email(      $request->get_param( 'email' )   ?? '' );
+    $name    = sanitize_text_field( $request->get_param( 'name' )    ?? '' );
+    $phone   = sanitize_text_field( $request->get_param( 'phone' )   ?? '' );
+    $company = sanitize_text_field( $request->get_param( 'company' ) ?? '' );
+    $tier    = sanitize_text_field( $request->get_param( 'tier' )    ?? '' );
+    $token   = sanitize_text_field( $request->get_param( 'token' )   ?? '' );
+
+    // Validate the signed token to prevent abuse
+    $expected = quiz_cta_token( $action, $email, $tier );
+    if ( ! hash_equals( $expected, $token ) ) {
+        wp_redirect( home_url( '/' ) );
+        exit;
+    }
+
+    // Send the CTA email to admin (same as popup CTA click)
+    quiz_send_cta_email( $name, $email, $phone, $company, $tier, $action );
+
+    // Redirect to the configured CTA URL or home
+    if ( $action === 'schedule' ) {
+        $redirect = defined('QUIZ_CTA_REQUEST_CALL') && QUIZ_CTA_REQUEST_CALL !== '#'
+            ? QUIZ_CTA_REQUEST_CALL
+            : home_url( '/' );
+    } else {
+        $redirect = defined('QUIZ_CTA_CONSULT_PLAN') && QUIZ_CTA_CONSULT_PLAN !== '#'
+            ? QUIZ_CTA_CONSULT_PLAN
+            : home_url( '/' );
+    }
+
+    wp_redirect( $redirect );
+    exit;
+}
+
+/**
+ * Generate a signed token for an email CTA link.
+ * Uses WordPress auth keys so tokens are site-specific.
+ */
+function quiz_cta_token( string $action, string $email, string $tier ): string {
+    return hash_hmac( 'sha256', "{$action}|{$email}|{$tier}", wp_salt('auth') );
+}
+
+
 // ── Main handler ──────────────────────────────────────────────────────────────
  
 function quiz_handle_submission( WP_REST_Request $request ) {
@@ -297,9 +354,11 @@ function quiz_send_admin_email(
                     style='width:620px;height:110px;'>
               <v:fill type='gradient' color='#0f1f3d' color2='#1a3260' angle='135' focus='100%'/>
               <v:textbox inset='0,0,0,0'>
+              <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'>
+              <tr><td style='padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
             <![endif]-->
             <div style='background:linear-gradient(135deg,#0f1f3d 0%,#1a3260 100%);
-                        padding-top:40px;padding-bottom:30px;padding-left:40px;padding-right:40px;'>
+                        padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
               <h1 style='margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
                          color:#ffffff;font-family:Arial,Helvetica,sans-serif;
                          letter-spacing:-0.03em;line-height:1.2;'>New Outsourcing Assessment</h1>
@@ -309,7 +368,7 @@ function quiz_send_admin_email(
                 " . esc_html( $fullname ) . " &mdash; " . esc_html( $company ) . "
               </p>
             </div>
-            <!--[if mso]></v:textbox></v:rect><![endif]-->
+            <!--[if mso]></td></tr></table></v:textbox></v:rect><![endif]-->
           </td>
         </tr>
 
@@ -509,9 +568,18 @@ function quiz_send_user_email(
             $btn_bg     = $is_primary ? '#54c8ef' : 'transparent';
             $btn_color  = $is_primary ? '#0f1f3d' : '#54c8ef';
 
-            $href = $is_primary
-                ? ( defined('QUIZ_CTA_SCHEDULE_URL') ? QUIZ_CTA_SCHEDULE_URL : '#' )
-                : ( defined('QUIZ_CTA_CONSULT_URL')  ? QUIZ_CTA_CONSULT_URL  : '#' );
+            // Generate a signed REST URL so clicking the button triggers quiz_send_cta_email
+            // AND then redirects to the configured landing page
+            $token = quiz_cta_token( $cta_action_btn, $email, $tier );
+            $href  = rest_url( 'scorecard/v1/cta' ) . '?' . http_build_query( [
+                'action'  => $cta_action_btn,
+                'email'   => $email,
+                'name'    => $fullname,
+                'phone'   => $phone,
+                'company' => $company,
+                'tier'    => $tier,
+                'token'   => $token,
+            ] );
 
             $btn_html .= "
               <td align='center' style='padding-left:6px;padding-right:6px;padding-bottom:8px;'>
@@ -585,9 +653,11 @@ function quiz_send_user_email(
                     style='width:620px;height:110px;'>
               <v:fill type='gradient' color='#0f1f3d' color2='#1a3260' angle='135' focus='100%'/>
               <v:textbox inset='0,0,0,0'>
+              <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'>
+              <tr><td style='padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
             <![endif]-->
             <div style='background:linear-gradient(135deg,#0f1f3d 0%,#1a3260 100%);
-                        padding-top:40px;padding-bottom:30px;padding-left:40px;padding-right:40px;'>
+                        padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
               <h1 style='margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
                          color:#ffffff;font-family:Arial,Helvetica,sans-serif;
                          letter-spacing:-0.03em;line-height:1.2;'>Thank You, " . esc_html( $fullname ) . "!</h1>
@@ -595,7 +665,7 @@ function quiz_send_user_email(
                         font-family:Arial,Helvetica,sans-serif;
                         letter-spacing:0.05em;text-transform:uppercase;'>Your Assessment Has Been Received</p>
             </div>
-            <!--[if mso]></v:textbox></v:rect><![endif]-->
+            <!--[if mso]></td></tr></table></v:textbox></v:rect><![endif]-->
           </td>
         </tr>
 
@@ -757,19 +827,26 @@ function quiz_send_cta_email(
 
         <!-- HEADER -->
         <tr>
-          <td style='background-color:#1a3260;
-                     padding-top:40px;padding-bottom:30px;padding-left:40px;padding-right:40px;
-                     border-bottom-width:3px;border-bottom-style:solid;border-bottom-color:#54c8ef;
-                     border-radius:16px 16px 0 0;'>
-            <h1 style='margin:0;font-size:22px;font-weight:800;color:#ffffff;
-                       font-family:Arial,Helvetica,sans-serif;letter-spacing:-0.03em;'>
-              " . esc_html( $cta_label ) . "
-            </h1>
-            <p style='margin:8px 0 0;font-size:13px;color:#7aadcc;
-                      font-family:Arial,Helvetica,sans-serif;
-                      letter-spacing:0.05em;text-transform:uppercase;'>
-              " . esc_html( $subject ) . "
-            </p>
+          <td style='padding:0;border-bottom-width:3px;border-bottom-style:solid;
+                     border-bottom-color:#54c8ef;border-radius:16px 16px 0 0;'>
+            <!--[if mso]>
+            <v:rect xmlns:v='urn:schemas-microsoft-com:vml' fill='true' stroke='false'
+                    style='width:620px;height:110px;'>
+              <v:fill type='gradient' color='#0f1f3d' color2='#1a3260' angle='135' focus='100%'/>
+              <v:textbox inset='0,0,0,0'>
+              <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'>
+              <tr><td style='padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
+            <![endif]-->
+            <div style='background:linear-gradient(135deg,#0f1f3d 0%,#1a3260 100%);
+                        padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
+              <h1 style='margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
+                         color:#ffffff;font-family:Arial,Helvetica,sans-serif;
+                         letter-spacing:-0.03em;line-height:1.2;'>" . esc_html( $cta_label ) . "</h1>
+              <p style='margin:0;font-size:13px;color:#7aadcc;
+                        font-family:Arial,Helvetica,sans-serif;
+                        letter-spacing:0.05em;text-transform:uppercase;'>" . esc_html( $subject ) . "</p>
+            </div>
+            <!--[if mso]></td></tr></table></v:textbox></v:rect><![endif]-->
           </td>
         </tr>
 

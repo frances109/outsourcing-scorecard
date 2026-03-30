@@ -88,9 +88,11 @@ function ebHeader(title, sub) {
       <v:fill type="gradient" color="${C.card}" color2="${C.headerBg}"
               angle="135" focus="100%"/>
       <v:textbox inset="0,0,0,0">
+      <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0">
+      <tr><td style="padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;">
     <![endif]-->
     <div style="background:linear-gradient(135deg,${C.card} 0%,${C.headerBg} 100%);
-                padding-top:40px;padding-bottom:30px;
+                padding-top:36px;padding-bottom:26px;
                 padding-left:40px;padding-right:40px;">
       <h1 style="margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
                  color:${C.white};font-family:${C.font};letter-spacing:-0.03em;
@@ -99,7 +101,7 @@ function ebHeader(title, sub) {
                 letter-spacing:0.05em;text-transform:uppercase;">${sub}</p>
     </div>
     <!--[if mso]>
-      </v:textbox>
+      </td></tr></table></v:textbox>
     </v:rect>
     <![endif]-->
   </td>
