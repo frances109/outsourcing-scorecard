@@ -213,8 +213,6 @@ function quiz_build_headers( string $reply_to, string $cc, string $bcc ): array 
     return $headers;
 }
  
- 
-// ── Admin notification email ──────────────────────────────────────────────────
 
 // ── Admin notification email — full Outlook-safe table layout ─────────────────
 
@@ -627,7 +625,6 @@ function quiz_send_user_email(
  
 // ── CTA contact-details email (admin only, triggered by popup button) ──────────
 // Sends only the contact details (q16 group) to admin with CTA-specific subject.
-// Subject: "Discovery Call for Outsourcing Ready" or "Consultation for <tier>"
 
 function quiz_send_cta_email(
     string $fullname,
@@ -644,8 +641,8 @@ function quiz_send_cta_email(
 
     // CTA-specific subjects (mirrors email-builder.js buildCtaEmail subjects)
     if ( $cta_action === 'schedule' ) {
-        $subject    = 'Discovery Call for Outsourcing Ready';
-        $cta_label  = 'Schedule Your Strategy Call';
+        $subject    = 'Request for a Discovery Call';
+        $cta_label  = 'Request Your Strategy Call';
     } else {
         $subject    = 'Consultation for ' . $tier;
         $cta_label  = 'Book a Consultation';

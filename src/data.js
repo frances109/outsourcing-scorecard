@@ -274,7 +274,7 @@ export const SCORING_RULES = [
 /*
    TIERS
    Each CTA has an "action" key:
-     "schedule"  → email admin  (subject: "Discovery Call for Outsourcing Ready")
+     "schedule"  → email admin  (subject: "Request for a Discovery Call")
      "consult"   → email admin  (subject: "Consultation for <tier title>")
      "download"  → generate & download PDF via pdf-builder.js
 */

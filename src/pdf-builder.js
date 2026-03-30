@@ -73,9 +73,9 @@ function pdfCover(doc) {
     doc.text("Your personalised outsourcing readiness report.", ML, 158);
 
     // Edition note
-    pdfSetText(doc, PDF.muted);
-    doc.setFontSize(9);
-    doc.text("Magellan Solutions  ·  " + new Date().getFullYear(), ML, PH - 14);
+    // pdfSetText(doc, PDF.muted);
+    // doc.setFontSize(9);
+    // doc.text("Magellan Solutions  ·  " + new Date().getFullYear(), ML, PH - 14);
 }
 
 /* ── Section heading ─────────────────────────────────────────── */
@@ -431,7 +431,7 @@ export function generateResultsPDF(formData, tierTitle, tierBody, goalLine, insi
     y += 4;
 
     y = pdfCallout(doc, y,
-        "Visit magellan-solutions.com or schedule a free strategy call to learn how " +
+        "Visit magellan-solutions.com or request a strategy call to learn how " +
         "we can build a custom outsourcing solution tailored to your business.",
         20
     );

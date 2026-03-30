@@ -485,9 +485,11 @@ $(document).ready(function () {
             generateResultsPDF(formData, _lastTier.title, _lastTier.body, _lastTier.goalLine, _lastInsights, itiInstance);
             $('#overlay, #popup').removeClass('d-none');
             $('#popup').addClass('d-flex flex-column');
+            $('#submitBtn').prop('disabled', true);
         });
 
     $('#closePopup').on('click', () => {
         $('#overlay, #popup').addClass('d-none');
+        setTimeout(() => window.location.href = import.meta.env.VITE_WP_URL, 3000); // outsourcing-technical-guides
     });
 });

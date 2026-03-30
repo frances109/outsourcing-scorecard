@@ -366,6 +366,7 @@ export function buildAdminEmail(formData, tierTitle, itiInstance, score = 0) {
  */
 export function buildUserEmail(formData, tierTitle, tierBody, goalLine, insights, itiInstance) {
     const fullname   = formData.get('fullname') ?? '';
+    const company    = formData.get('company')  ?? '';
     const goalAnswer = resolveLabel('q14', formData.get('q14'));
 
     const insightItems = insights.map(msg =>
@@ -374,12 +375,11 @@ export function buildUserEmail(formData, tierTitle, tierBody, goalLine, insights
     ).join('');
 
     return ebShell([
-        ebHeader(`Thank You, ${fullname}!`, 'Your Assessment Has Been Received'),
+        ebHeader(`Magellan Solutions Outsourcing Scorecard`, `${company} - Outsourcing Readiness Results`),
 
         ebSection(ebIntroBox(
             `Thank you for completing the ` +
-            `<strong style="color:${C.accent};">Outsourcing Readiness Assessment</strong>. ` +
-            `Our team will review your responses and reach out shortly.`
+            `<strong style="color:${C.accent};">Outsourcing Readiness Assessment</strong>. `
         ), 30),
 
         ebSection(
@@ -432,11 +432,11 @@ export function buildUserEmail(formData, tierTitle, tierBody, goalLine, insights
  */
 export function buildCtaEmail(action, formData, tierTitle, itiInstance) {
     const ctaLabels = {
-        schedule: 'Schedule Your Strategy Call',
+        schedule: 'Request Your Strategy Call',
         consult:  'Book a Consultation',
     };
     const subjects = {
-        schedule: 'Discovery Call for Outsourcing Ready',
+        schedule: 'Request for a Discovery Call',
         consult:  `Consultation for ${tierTitle}`,
     };
     const ctaLabel = ctaLabels[action] ?? action;
