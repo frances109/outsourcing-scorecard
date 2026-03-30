@@ -6,7 +6,7 @@
  * (create the mu-plugins folder if it doesn't exist)
  * It auto-loads — no activation needed.
  *
- * Endpoint: POST /wp-json/quiz/v1/submit
+ * Endpoint: POST /wp-json/scorecard/v1/submit
  *
  * Required plugins:
  *   - WP Mail SMTP  (handles email delivery)
@@ -38,6 +38,13 @@ define('QUIZ_ADMIN_REPLY_TO', '');
 
 define('QUIZ_USER_CC',  '');   // optional
 define('QUIZ_USER_BCC', '');   // optional
+
+// ── CTA button URLs in the user results email ────────────────────────────────
+// These appear as clickable buttons in the email the submitter receives.
+// Leave as '#' (default) or set to real landing/booking page URLs.
+
+define('QUIZ_CTA_SCHEDULE_URL', '#');   // URL for "Schedule Your Strategy Call" button
+define('QUIZ_CTA_CONSULT_URL',  '#');   // URL for "Book a Consultation" button
 
 // =============================================================================
 // END OF CONFIGURATION — do not edit below this line
@@ -137,10 +144,15 @@ function quiz_handle_submission( WP_REST_Request $request ) {
     $tier_body = sanitize_textarea_field( $data['tier_body'] ?? '' );
     $goal_line = sanitize_textarea_field( $data['goal_line'] ?? '' );
     $score     = intval( $data['score']                  ?? 0 );
-    $answers   = is_array( $data['answers']  ?? null ) ? $data['answers']  : [];
-    $insights  = is_array( $data['insights'] ?? null )
+    $answers      = is_array( $data['answers']  ?? null ) ? $data['answers']  : [];
+    $insights     = is_array( $data['insights'] ?? null )
         ? array_map( 'sanitize_text_field', $data['insights'] )
         : [];
+    $ctas         = is_array( $data['ctas'] ?? null )
+        ? $data['ctas']
+        : [];
+    $pdf_base64   = sanitize_text_field( $data['pdf_base64']   ?? '' );
+    $pdf_filename = sanitize_file_name(  $data['pdf_filename'] ?? 'Magellan-Readiness-Results.pdf' );
  
     if ( ! $fullname || ! is_email( $email ) || ! $company ) {
         return new WP_Error( 'missing_fields', 'Required fields are missing.', [ 'status' => 400 ] );
@@ -158,7 +170,7 @@ function quiz_handle_submission( WP_REST_Request $request ) {
         // Full quiz submission: send both admin full-answers email + user results email
         $admin_sent = quiz_send_admin_email( $fullname, $email, $phone, $company, $tier, $score, $answers );
         $goal_answer = quiz_q14_label( sanitize_text_field( $data['goal_answer'] ?? '' ) );
-        $user_sent  = quiz_send_user_email( $fullname, $email, $tier, $tier_body, $goal_line, $goal_answer, $insights );
+        $user_sent  = quiz_send_user_email( $fullname, $email, $tier, $tier_body, $goal_line, $goal_answer, $insights, $ctas, $pdf_base64, $pdf_filename );
 
         // 4. Save to Flamingo
         quiz_save_to_flamingo( $fullname, $email, $phone, $company, $tier, $tier_body, $score, $answers, $insights );
@@ -415,7 +427,10 @@ function quiz_send_user_email(
     string $tier_body,
     string $goal_line,
     string $goal_answer,
-    array  $insights
+    array  $insights,
+    array  $ctas        = [],   // CTA buttons [{label, action}] from tier
+    string $pdf_base64  = '',   // Results PDF as base64 for attachment
+    string $pdf_filename = 'Magellan-Readiness-Results.pdf'
 ): bool {
     $subject = 'Your Outsourcing Readiness Results — Magellan Solutions';
  
@@ -480,6 +495,66 @@ function quiz_send_user_email(
           </td>
         </tr>";
 
+    // ── CTA buttons section ──────────────────────────────────────────────────
+    // Build inline CTA buttons matching the popup (excludes 'download' — frontend only)
+    $cta_section = '';
+    if ( ! empty( $ctas ) ) {
+        $btn_html = '';
+        foreach ( $ctas as $cta ) {
+            $cta_label_btn  = esc_html( $cta['label']  ?? '' );
+            $cta_action_btn = sanitize_text_field( $cta['action'] ?? '' );
+            if ( ! $cta_label_btn || ! $cta_action_btn ) continue;
+
+            $is_primary = ( $cta_action_btn === 'schedule' );
+            $btn_bg     = $is_primary ? '#54c8ef' : 'transparent';
+            $btn_color  = $is_primary ? '#0f1f3d' : '#54c8ef';
+
+            $href = $is_primary
+                ? ( defined('QUIZ_CTA_SCHEDULE_URL') ? QUIZ_CTA_SCHEDULE_URL : '#' )
+                : ( defined('QUIZ_CTA_CONSULT_URL')  ? QUIZ_CTA_CONSULT_URL  : '#' );
+
+            $btn_html .= "
+              <td align='center' style='padding-left:6px;padding-right:6px;padding-bottom:8px;'>
+                <!--[if mso]>
+                <v:roundrect xmlns:v='urn:schemas-microsoft-com:vml' href='{$href}'
+                  style='height:44px;v-text-anchor:middle;width:220px;' arcsize='20%'
+                  stroke='true' strokecolor='#54c8ef' fillcolor='{$btn_bg}'>
+                  <w:anchorlock/>
+                  <center style='color:{$btn_color};font-family:Arial,sans-serif;
+                                  font-size:13px;font-weight:700;'>{$cta_label_btn}</center>
+                </v:roundrect>
+                <![endif]-->
+                <!--[if !mso]><!-->
+                <a href='{$href}'
+                   style='background-color:{$btn_bg};border-width:2px;border-style:solid;
+                          border-color:#54c8ef;border-radius:8px;color:{$btn_color};
+                          display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:13px;
+                          font-weight:700;padding-top:12px;padding-bottom:12px;
+                          padding-left:24px;padding-right:24px;text-decoration:none;
+                          -webkit-text-size-adjust:none;mso-hide:all;'>{$cta_label_btn}</a>
+                <!--<![endif]-->
+              </td>";
+        }
+
+        if ( $btn_html ) {
+            $cta_section = "
+        <tr>
+          <td style='padding-top:28px;padding-left:40px;padding-right:40px;padding-bottom:0;'>
+            <p style='margin:0;margin-bottom:16px;font-size:10px;font-weight:700;
+                      letter-spacing:0.12em;text-transform:uppercase;color:#54c8ef;
+                      font-family:Arial,Helvetica,sans-serif;'>Next Steps</p>
+            <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'>
+              <tr><td align='center'>
+                <table role='presentation' cellpadding='0' cellspacing='0' border='0'>
+                  <tr style='vertical-align:top;'>{$btn_html}</tr>
+                </table>
+              </td></tr>
+            </table>
+          </td>
+        </tr>";
+        }
+    }
+
     $body = "<!DOCTYPE html>
 <html xmlns='http://www.w3.org/1999/xhtml' xmlns:v='urn:schemas-microsoft-com:vml'
       xmlns:o='urn:schemas-microsoft-com:office:office'>
@@ -515,66 +590,62 @@ function quiz_send_user_email(
                         padding-top:40px;padding-bottom:30px;padding-left:40px;padding-right:40px;'>
               <h1 style='margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
                          color:#ffffff;font-family:Arial,Helvetica,sans-serif;
-                         letter-spacing:-0.03em;line-height:1.2;'>" . esc_html( $cta_label ) . "</h1>
+                         letter-spacing:-0.03em;line-height:1.2;'>Thank You, " . esc_html( $fullname ) . "!</h1>
               <p style='margin:0;font-size:13px;color:#7aadcc;
                         font-family:Arial,Helvetica,sans-serif;
-                        letter-spacing:0.05em;text-transform:uppercase;'>" . esc_html( $subject ) . "</p>
+                        letter-spacing:0.05em;text-transform:uppercase;'>Your Assessment Has Been Received</p>
             </div>
             <!--[if mso]></v:textbox></v:rect><![endif]-->
           </td>
         </tr>
 
-        <!-- ASSESSMENT RESULT BADGE -->
+        <!-- INTRO -->
         <tr>
           <td style='padding-top:30px;padding-left:40px;padding-right:40px;padding-bottom:0;'>
             <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
                    style='background-color:#132030;border-width:1px;border-style:solid;
                           border-color:#1e4060;border-radius:10px;'>
               <tr>
-                <td style='padding-top:16px;padding-bottom:16px;padding-left:20px;padding-right:20px;'>
-                  <p style='margin:0;margin-bottom:6px;font-size:10px;font-weight:700;letter-spacing:0.12em;
-                             text-transform:uppercase;color:#54c8ef;font-family:Arial,Helvetica,sans-serif;'>Assessment Result</p>
-                  <p style='margin:0;font-size:16px;font-weight:700;color:#ffffff;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $tier ) . "</p>
+                <td style='padding-top:20px;padding-bottom:20px;padding-left:24px;padding-right:24px;'>
+                  <p style='margin:0;font-size:14px;color:#d9e8f5;line-height:1.75;
+                             font-family:Arial,Helvetica,sans-serif;'>
+                    Thank you for completing the
+                    <strong style='color:#54c8ef;'>Outsourcing Readiness Assessment</strong>.
+                    Our team will review your responses and reach out shortly.
+                  </p>
                 </td>
               </tr>
             </table>
           </td>
         </tr>
 
-        <!-- CONTACT DETAILS -->
+        <!-- YOUR RESULT -->
         <tr>
           <td style='padding-top:24px;padding-left:40px;padding-right:40px;padding-bottom:0;'>
             <p style='margin:0;margin-bottom:12px;font-size:10px;font-weight:700;letter-spacing:0.12em;
-                      text-transform:uppercase;color:#54c8ef;font-family:Arial,Helvetica,sans-serif;'>Contact Details</p>
+                      text-transform:uppercase;color:#54c8ef;font-family:Arial,Helvetica,sans-serif;'>Your Result</p>
             <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
                    style='background-color:#162848;border-radius:10px;'>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Full Name</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#ffffff;font-weight:700;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $fullname ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Email</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#54c8ef;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $email ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Phone</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#d9e8f5;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $phone ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Company</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;'>
-                <p style='margin:0;font-size:14px;color:#ffffff;font-weight:700;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $company ) . "</p>
-              </td></tr>
+              <tr>
+                <td style='padding-top:20px;padding-bottom:20px;padding-left:24px;padding-right:24px;'>
+                  <p style='margin:0;margin-bottom:10px;font-size:18px;font-weight:800;color:#ffffff;
+                             letter-spacing:-0.02em;font-family:Arial,Helvetica,sans-serif;'>
+                    " . esc_html( $tier ) . "
+                  </p>
+                  <p style='margin:0;font-size:13px;color:#d9e8f5;line-height:1.7;
+                             font-family:Arial,Helvetica,sans-serif;'>
+                    " . esc_html( $tier_body ) . "
+                  </p>
+                </td>
+              </tr>
             </table>
           </td>
         </tr>
+
+        " . $insights_section . "
+        " . $goal_section . "
+        " . $note_section . "
+        " . $cta_section . "
 
         <!-- FOOTER -->
         <tr>
@@ -586,8 +657,8 @@ function quiz_send_user_email(
                 <td style='padding-top:16px;padding-bottom:16px;padding-left:20px;padding-right:20px;'>
                   <p style='margin:0;font-size:12px;color:#5a7a99;text-align:center;line-height:1.6;
                             font-family:Arial,Helvetica,sans-serif;'>
-                    This lead clicked <strong style='color:#54c8ef;'>" . esc_html( $cta_label ) . "</strong>
-                    after completing the Outsourcing Readiness Assessment.
+                    You are receiving this because you completed the Outsourcing Readiness Assessment.<br>
+                    If you did not submit this form, please ignore this email.
                   </p>
                 </td>
               </tr>
@@ -601,14 +672,11 @@ function quiz_send_user_email(
   </tr>
 </table>
 </body></html>";
- 
-    // Send to the submitter.
-    // Also CC the admin list so they receive the same full results email
-    // in addition to the separate admin notification email.
+
+    // ── Send email with PDF attachment ────────────────────────────────────────
     $admin_list = quiz_split_addresses( QUIZ_ADMIN_TO );
     $cc_list    = quiz_split_addresses( QUIZ_USER_CC );
 
-    // Merge admin addresses into CC — skip if they match the submitter
     foreach ( $admin_list as $admin_addr ) {
         if ( strtolower( $admin_addr ) !== strtolower( $email )
              && ! in_array( strtolower( $admin_addr ), array_map( 'strtolower', $cc_list ), true ) ) {
@@ -616,10 +684,28 @@ function quiz_send_user_email(
         }
     }
 
-    $cc_string = implode( ', ', $cc_list );
-    $headers   = quiz_build_headers( $email, $cc_string, QUIZ_USER_BCC );
+    $cc_string  = implode( ', ', $cc_list );
+    $headers    = quiz_build_headers( $email, $cc_string, QUIZ_USER_BCC );
 
-    return wp_mail( $email, $subject, $body, $headers );
+    // Attach the Results PDF if provided as base64
+    $attachments = [];
+    if ( ! empty( $pdf_base64 ) ) {
+        $tmp_dir  = get_temp_dir();
+        $tmp_file = $tmp_dir . sanitize_file_name( $pdf_filename );
+        $decoded  = base64_decode( $pdf_base64, true );
+        if ( $decoded !== false && file_put_contents( $tmp_file, $decoded ) !== false ) {
+            $attachments[] = $tmp_file;
+        }
+    }
+
+    $sent = wp_mail( $email, $subject, $body, $headers, $attachments );
+
+    // Clean up temp file
+    if ( ! empty( $attachments ) && file_exists( $attachments[0] ) ) {
+        wp_delete_file( $attachments[0] );
+    }
+
+    return $sent;
 }
  
  

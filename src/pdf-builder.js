@@ -442,7 +442,18 @@ export function generateResultsPDF(formData, tierTitle, tierBody, goalLine, insi
         ? "Magellan-Readiness-Results-" + formData.get("fullname").replace(/\s+/g, "-") + ".pdf"
         : "Magellan-Outsourcing-Readiness-Results.pdf";
 
-    doc.save(filename);
+    // Return base64 string for email attachment instead of auto-saving
+    return doc.output('datauristring').split(',')[1]; // pure base64
+}
+
+/**
+ * generateResultsPDFBase64
+ * Same as generateResultsPDF but returns a base64 string
+ * so wp-service.js can send it to the PHP endpoint as an email attachment.
+ * @returns {string} base64-encoded PDF
+ */
+export function generateResultsPDFBase64(formData, tierTitle, tierBody, goalLine, insights, itiInstance) {
+    return generateResultsPDF(formData, tierTitle, tierBody, goalLine, insights, itiInstance);
 }
 
 /* ================================================================

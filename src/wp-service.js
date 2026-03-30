@@ -11,7 +11,8 @@
  *   VITE_RECAPTCHA_SITE_KEY = your-recaptcha-v3-site-key
  */
 
-import { SCORING_RULES } from './data.js';
+import { SCORING_RULES, TIERS } from './data.js';
+import { generateResultsPDFBase64 } from './pdf-builder.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -114,18 +115,35 @@ export function sendSubmitEmails(formData, tier, insights, itiInstance) {
         ? itiInstance.getNumber()       // E.164 format e.g. +639171234567
         : (formData.get('phone') ?? '');
 
+    // Generate personalised Results PDF and send as base64 to PHP for email attachment
+    const pdfBase64 = generateResultsPDFBase64(formData, tier.title, tier.body, tier.goalLine, insights, itiInstance);
+
+    // Build the submitter's full name for the PDF filename
+    const fullname = formData.get('fullname') ?? '';
+    const pdfFilename = fullname
+        ? `Magellan-Readiness-Results-${fullname.replace(/\s+/g, '-')}.pdf`
+        : 'Magellan-Outsourcing-Readiness-Results.pdf';
+
+    // Derive CTA labels for this tier (exclude 'download' — frontend only)
+    const tierCtas = (tier.ctas ?? [])
+        .filter(c => c.action !== 'download')
+        .map(c => ({ label: c.label, action: c.action }));
+
     const payload = {
-        fullname:    formData.get('fullname') ?? '',
-        email:       formData.get('email')    ?? '',
-        phone:       fullPhone,
-        company:     formData.get('company')  ?? '',
-        tier:        tier.title,
-        tier_body:   tier.body,
-        goal_line:   tier.goalLine,
-        goal_answer: formData.get('q14') ?? '', // raw value; PHP maps to label for user email
-        score:       calcScore(formData),
-        answers:     extractAnswers(formData),
-        insights:    insights,
+        fullname:     fullname,
+        email:        formData.get('email')    ?? '',
+        phone:        fullPhone,
+        company:      formData.get('company')  ?? '',
+        tier:         tier.title,
+        tier_body:    tier.body,
+        goal_line:    tier.goalLine,
+        goal_answer:  formData.get('q14') ?? '', // raw value; PHP maps to label for user email
+        score:        calcScore(formData),
+        answers:      extractAnswers(formData),
+        insights:     insights,
+        ctas:         tierCtas,          // CTA buttons for user email
+        pdf_base64:   pdfBase64,         // Results PDF as base64 for email attachment
+        pdf_filename: pdfFilename,       // PDF filename for attachment
     };
 
     postToWordPress(payload)

@@ -13,7 +13,6 @@ import '../style.css';
 
 import { CONFIG, SCORING_RULES, TIERS } from './data.js';
 import { sendSubmitEmails, sendCtaEmail } from './wp-service.js';
-import { generateResultsPDF } from './pdf-builder.js';
 
 // ── Hosted Readiness Guide PDF download ───────────────────────────────────────
 // Place your PDF at: public/assets/readiness-guide.pdf
@@ -481,8 +480,6 @@ $(document).ready(function () {
             buildPopup(formData);
             // Trigger both admin + user emails on Check Readiness submit (once, here only)
             sendSubmitEmails(formData, _lastTier, _lastInsights, itiInstance);
-            // Also generate & download the personalised Results PDF
-            generateResultsPDF(formData, _lastTier.title, _lastTier.body, _lastTier.goalLine, _lastInsights, itiInstance);
             $('#overlay, #popup').removeClass('d-none');
             $('#popup').addClass('d-flex flex-column');
             $('#submitBtn').prop('disabled', true);
