@@ -430,11 +430,25 @@ export function generateResultsPDF(formData, tierTitle, tierBody, goalLine, insi
     ]);
     y += 4;
 
-    y = pdfCallout(doc, y,
-        "Visit magellan-solutions.com or request a strategy call to learn how " +
-        "we can build a custom outsourcing solution tailored to your business.",
-        20
-    );
+    // Dynamic callout — text depends on the user's result tier
+    var calloutText;
+    if ( tierTitle && tierTitle.toLowerCase().indexOf('ready!') !== -1 ) {
+        // "You are Outsourcing Ready!" — prompt to schedule a strategy call
+        calloutText =
+            "Your business is ready to outsource. Visit magellan-solutions.com " +
+            "or request a strategy call to start building your custom outsourcing solution.";
+    } else if ( tierTitle && tierTitle.toLowerCase().indexOf('partially') !== -1 ) {
+        // "You are Partially Ready." — prompt to book a consultation
+        calloutText =
+            "You're almost there. Book a consultation at magellan-solutions.com " +
+            "and we'll help you close the gaps before you outsource.";
+    } else {
+        // "You are Not Ready Yet." — prompt to book a consultation
+        calloutText =
+            "Building the right foundations makes all the difference. Book a consultation " +
+            "at magellan-solutions.com and we'll create a readiness roadmap for your business.";
+    }
+    y = pdfCallout(doc, y, calloutText, 20);
 
     /* ── Download ────────────────────────────────────────────────── */
     // Results PDF — personalised with the user's name (separate from Readiness Guide PDF)

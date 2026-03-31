@@ -1,7 +1,7 @@
 /**
  * data.js
  * All quiz data: clusters/questions, scoring rules, result tiers.
- * Imported by script.js, email-builder.js, and pdf-builder.js.
+ * Imported by main.js, wp-service.js, and pdf-builder.js.
  */
 
 export const CONFIG = {
@@ -284,7 +284,7 @@ export const TIERS = [
         title:    "You are Outsourcing Ready!",
         body:     "Your organization already has the operational maturity needed to outsource successfully. Documented processes, collaboration tools, and leadership readiness indicate that external teams can integrate smoothly into your workflow. The next step is identifying the right functions to outsource and building a structured onboarding plan.",
         goalLine: "outsourcing can help accelerate this by reallocating internal resources to higher-value strategic work.",
-        ctas:     [{ label: "Schedule Your Strategy Call", action: "schedule" }]
+        ctas:     [{ label: "Request your Strategy Call", action: "schedule" }]
     },
     {
         min:      9,
