@@ -463,7 +463,6 @@ function quiz_send_user_email(
                              font-family:Arial,Helvetica,sans-serif;'>
                     Thank you for completing the
                     <strong style='color:#54c8ef;'>Outsourcing Readiness Assessment</strong>.
-                    Our team will review your responses and reach out shortly.
                   </p>
                 </td>
               </tr>

@@ -15,15 +15,15 @@ import { CONFIG, SCORING_RULES, TIERS } from './data.js';
 import { sendSubmitEmails, sendCtaEmail } from './wp-service.js';
 
 // ── Hosted Readiness Guide PDF download ───────────────────────────────────────
-// Place your PDF at: public/assets/Outsourcing Readiness Checklist.pdf
+// Place your PDF at: public/assets/readiness-guide.pdf
 // Vite copies public/ contents to dist/ root, so it will be served at:
-//   https://yoursite.com/scorecard/assets/Outsourcing Readiness Checklist.pdf
+//   https://yoursite.com/scorecard/assets/readiness-guide.pdf
 // To swap the PDF: just replace the file in public/assets/ and rebuild.
 
 function downloadReadinessGuide() {
     // import.meta.env.BASE_URL is the vite base path (e.g. '/scorecard/')
     // The PDF lives in public/assets/ which Vite copies to dist/assets/
-    const pdfUrl = `${import.meta.env.BASE_URL}assets/Outsourcing Readiness Checklist.pdf`;
+    const pdfUrl = `${import.meta.env.BASE_URL}assets/readiness-guide.pdf`;
     const $btn    = $('[data-action="download"]');
     const origTxt = $btn.text();
 
@@ -38,7 +38,7 @@ function downloadReadinessGuide() {
             const url  = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href     = url;
-            link.download = 'Outsourcing-Readiness-Guide.pdf';
+            link.download = 'Outsourcing-Readiness-Checklist.pdf';
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -328,12 +328,12 @@ function handleCtaClick(action) {
                 showCtaFeedback(action, true);
             })
             .catch(() => {
-                $btn.prop('disabled', false).text(action === 'schedule' ? 'Request your Strategy Call' : 'Book a Consultation');
+                $btn.prop('disabled', false).text(action === 'schedule' ? 'Schedule Your Strategy Call' : 'Book a Consultation');
                 showCtaFeedback(action, false);
             });
 
     } else if (action === 'download') {
-        // Download the hosted Readiness Guide PDF from public/assets/Outsourcing Readiness Checklist.pdf
+        // Download the hosted Readiness Guide PDF from public/assets/readiness-guide.pdf
         downloadReadinessGuide();
     }
 }
