@@ -3,26 +3,33 @@
  * quiz-email-builder.php
  * Builds all HTML email bodies and sends them for the Outsourcing Scorecard.
  *
- * Included by quiz-endpoint.php — do NOT upload this file alone.
+ * Included automatically by quiz-endpoint.php via require_once.
  * Place BOTH files in: /wp-content/mu-plugins/
  *
- * Functions:
- *   quiz_build_headers()    — builds wp_mail() header array
- *   quiz_send_admin_email() — admin notification (full answers + score)
- *   quiz_send_user_email()  — user results email (result, insights, CTA buttons, PDF attachment)
- *   quiz_send_cta_email()   — CTA contact-details email (admin only)
+ * Public functions:
+ *   quiz_build_headers()    — assembles wp_mail() header array
+ *   quiz_send_admin_email() — full-answers notification to admin
+ *   quiz_send_user_email()  — results email to user AND admin (separate sends)
+ *   quiz_send_cta_email()   — contact-details-only email to admin (CTA clicks)
  *
- * Outlook compatibility applied throughout:
- *   - No rgba() — solid hex equivalents only
- *   - VML gradient header (v:rect + v:fill) with v:textbox inset for padding
- *   - No display:block on <span> — separate <tr> for label and value rows
- *   - No CSS padding/border shorthand — expanded to individual properties
- *   - Inline styles only — Gmail strips <style> blocks
- *   - font-family ends with Arial,Helvetica,sans-serif everywhere
+ * Internal helpers:
+ *   quiz_email_shell()      — outer DOCTYPE + table wrapper
+ *   quiz_email_header()     — gradient header row (VML for Outlook, CSS for others)
+ *   quiz_email_footer()     — branded footer row
+ *
+ * Email-client compatibility rules applied throughout:
+ *   - No rgba() — all colors are solid hex computed on the dark background
+ *   - Outlook gradient: VML v:rect + v:fill; padding via inner <table><td>
+ *     (v:textbox inset is ignored by Outlook — <td> padding is the only reliable method)
+ *   - No display:block on <span> — two separate <tr> rows per label+value pair
+ *   - No CSS shorthand (padding/border) — all properties expanded individually
+ *   - Inline styles only — Gmail strips anything in <style> blocks
+ *   - font-family always ends with Arial,Helvetica,sans-serif for universal fallback
+ *   - MSO conditional comments for Outlook column width and DPI fixes
  */
 
 
-// ── Build email headers ───────────────────────────────────────────────────────
+// ── Header builder ────────────────────────────────────────────────────────────
 
 function quiz_build_headers( string $reply_to, string $cc, string $bcc ): array {
     $headers = [ 'Content-Type: text/html; charset=UTF-8' ];
@@ -31,12 +38,10 @@ function quiz_build_headers( string $reply_to, string $cc, string $bcc ): array 
     if ( $reply_list ) {
         $headers[] = 'Reply-To: ' . implode( ', ', $reply_list );
     }
-
     $cc_list = quiz_split_addresses( $cc );
     if ( $cc_list ) {
         $headers[] = 'Cc: ' . implode( ', ', $cc_list );
     }
-
     $bcc_list = quiz_split_addresses( $bcc );
     if ( $bcc_list ) {
         $headers[] = 'Bcc: ' . implode( ', ', $bcc_list );
@@ -46,25 +51,83 @@ function quiz_build_headers( string $reply_to, string $cc, string $bcc ): array 
 }
 
 
-// ── VML gradient header snippet ───────────────────────────────────────────────
-// Shared by all three email types. Returns the full <tr> header block.
+// ── Outer shell ───────────────────────────────────────────────────────────────
+// Wraps email rows in the full DOCTYPE, body, and outer + card tables.
+
+function quiz_email_shell( string $rows ): string {
+    return "<!DOCTYPE html>
+<html xmlns='http://www.w3.org/1999/xhtml'
+      xmlns:v='urn:schemas-microsoft-com:vml'
+      xmlns:o='urn:schemas-microsoft-com:office:office'>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width,initial-scale=1'>
+  <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+  <!--[if mso]>
+  <xml>
+    <o:OfficeDocumentSettings>
+      <o:AllowPNG/>
+      <o:PixelsPerInch>96</o:PixelsPerInch>
+    </o:OfficeDocumentSettings>
+  </xml>
+  <![endif]-->
+</head>
+<body style='margin:0;padding:0;background-color:#f4f6fb;
+             font-family:Arial,Helvetica,sans-serif;
+             -webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;'>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
+       style='background-color:#f4f6fb;'>
+  <tr>
+    <td align='center' style='padding-top:40px;padding-bottom:40px;
+                               padding-left:16px;padding-right:16px;'>
+      <!--[if mso]>
+      <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'>
+      <tr><td>
+      <![endif]-->
+      <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
+             style='max-width:620px;width:100%;background-color:#0f1f3d;border-radius:16px;'>
+        {$rows}
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td>
+  </tr>
+</table>
+</body>
+</html>";
+}
+
+
+// ── Gradient header row ───────────────────────────────────────────────────────
+// Outlook compatibility note:
+//   Outlook's Word engine ignores CSS padding on <div> inside v:textbox.
+//   The ONLY reliable way to add padding inside a VML shape in Outlook is via
+//   a <table><tr><td style="padding:..."> nested inside the MSO conditional.
+//   v:textbox inset values are also unreliable — inner <td> is the safe method.
+//   Non-Outlook clients (Gmail, Apple Mail, Thunderbird) use the <div> with
+//   CSS gradient; they never process the VML conditional block.
 
 function quiz_email_header( string $title, string $subtitle ): string {
     return "
-        <!-- HEADER: VML gradient for Outlook, CSS gradient for Gmail/Apple Mail -->
+        <!-- HEADER — VML gradient for Outlook, CSS for all other clients -->
         <tr>
           <td style='padding:0;border-bottom-width:3px;border-bottom-style:solid;
                      border-bottom-color:#54c8ef;border-radius:16px 16px 0 0;'>
+
             <!--[if mso]>
             <v:rect xmlns:v='urn:schemas-microsoft-com:vml' fill='true' stroke='false'
                     style='width:620px;height:120px;'>
-              <v:fill type='gradient' color='#0f1f3d' color2='#1a3260' angle='135' focus='100%'/>
-              <v:textbox inset='40,36,40,26' style='mso-fit-shape-to-text:false;'>
-              <table role='presentation' width='540' cellpadding='0' cellspacing='0' border='0'>
-              <tr><td style='padding:0;'>
+              <v:fill type='gradient' color='#0f1f3d' color2='#1a3260'
+                      angle='135' focus='100%'/>
+              <v:textbox inset='0,0,0,0'>
+                <table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'>
+                <tr>
+                  <td style='padding-top:36px;padding-bottom:26px;
+                             padding-left:40px;padding-right:40px;'>
             <![endif]-->
+
             <div style='background:linear-gradient(135deg,#0f1f3d 0%,#1a3260 100%);
-                        padding-top:36px;padding-bottom:26px;padding-left:40px;padding-right:40px;'>
+                        padding-top:36px;padding-bottom:26px;
+                        padding-left:40px;padding-right:40px;'>
               <h1 style='margin:0;margin-bottom:6px;font-size:22px;font-weight:800;
                          color:#ffffff;font-family:Arial,Helvetica,sans-serif;
                          letter-spacing:-0.03em;line-height:1.2;'>{$title}</h1>
@@ -72,51 +135,23 @@ function quiz_email_header( string $title, string $subtitle ): string {
                         font-family:Arial,Helvetica,sans-serif;
                         letter-spacing:0.05em;text-transform:uppercase;'>{$subtitle}</p>
             </div>
-            <!--[if mso]></td></tr></table></v:textbox></v:rect><![endif]-->
+
+            <!--[if mso]>
+                  </td>
+                </tr>
+                </table>
+              </v:textbox>
+            </v:rect>
+            <![endif]-->
+
           </td>
         </tr>";
 }
 
 
-// ── Email shell ───────────────────────────────────────────────────────────────
-// Wraps all email content in the outer table + card table.
-
-function quiz_email_shell( string $rows ): string {
-    return "<!DOCTYPE html>
-<html xmlns='http://www.w3.org/1999/xhtml' xmlns:v='urn:schemas-microsoft-com:vml'
-      xmlns:o='urn:schemas-microsoft-com:office:office'>
-<head>
-  <meta charset='UTF-8'>
-  <meta name='viewport' content='width=device-width,initial-scale=1'>
-  <meta http-equiv='X-UA-Compatible' content='IE=edge'>
-  <!--[if mso]>
-  <xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml>
-  <![endif]-->
-</head>
-<body style='margin:0;padding:0;background-color:#f4f6fb;font-family:Arial,Helvetica,sans-serif;
-             -webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;'>
-<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
-       style='background-color:#f4f6fb;'>
-  <tr>
-    <td align='center' style='padding-top:40px;padding-bottom:40px;
-                               padding-left:16px;padding-right:16px;'>
-      <!--[if mso]><table role='presentation' width='620' cellpadding='0' cellspacing='0' border='0'><tr><td><![endif]-->
-      <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
-             style='max-width:620px;width:100%;background-color:#0f1f3d;
-                    border-radius:16px;overflow:hidden;'>
-        {$rows}
-      </table>
-      <!--[if mso]></td></tr></table><![endif]-->
-    </td>
-  </tr>
-</table>
-</body></html>";
-}
-
-
 // ── Footer row ────────────────────────────────────────────────────────────────
 
-function quiz_email_footer( string $text ): string {
+function quiz_email_footer( string $html ): string {
     return "
         <tr>
           <td style='padding-top:30px;padding-left:40px;padding-right:40px;padding-bottom:40px;'>
@@ -128,7 +163,7 @@ function quiz_email_footer( string $text ): string {
                            padding-left:20px;padding-right:20px;'>
                   <p style='margin:0;font-size:12px;color:#5a7a99;text-align:center;
                             line-height:1.6;font-family:Arial,Helvetica,sans-serif;'>
-                    {$text}
+                    {$html}
                   </p>
                 </td>
               </tr>
@@ -139,8 +174,8 @@ function quiz_email_footer( string $text ): string {
 
 
 // ── Admin notification email ──────────────────────────────────────────────────
-// Sent to QUIZ_ADMIN_TO on every form submission.
-// Contains: contact info, result tier + score badge, all 15 quiz answers.
+// Sent to every address in QUIZ_ADMIN_TO.
+// Contains: contact info card, result tier + score badge, all 15 quiz answers.
 
 function quiz_send_admin_email(
     string $fullname,
@@ -151,24 +186,25 @@ function quiz_send_admin_email(
     int    $score,
     array  $answers
 ): bool {
-    $to_list = quiz_split_addresses( QUIZ_ADMIN_TO );
+    $to_list  = quiz_split_addresses( QUIZ_ADMIN_TO );
     if ( empty( $to_list ) ) {
         $to_list = [ get_option( 'admin_email' ) ];
     }
-
     $reply_to = trim( QUIZ_ADMIN_REPLY_TO ) !== '' ? QUIZ_ADMIN_REPLY_TO : $email;
     $subject  = "New Outsourcing Assessment — {$fullname} ({$company})";
 
-    // Build answer rows — two <tr> per field (label row + value row) for Outlook
+    // Answer rows — two <tr> per question: label row + value row
+    // (Outlook ignores display:block on <span>, so we use separate rows)
     $labels       = quiz_field_labels();
     $answers_rows = '';
-    $answer_keys  = array_keys( $answers );
-    $last_key     = end( $answer_keys );
+    $keys         = array_keys( $answers );
+    $last_key     = end( $keys );
     foreach ( $answers as $key => $value ) {
-        $label   = isset( $labels[ $key ] ) ? esc_html( $labels[ $key ] ) : esc_html( $key );
-        $v       = is_array( $value ) ? esc_html( implode( ', ', $value ) ) : esc_html( (string) $value );
-        $border  = ( $key === $last_key ) ? '' :
+        $label  = isset( $labels[ $key ] ) ? esc_html( $labels[ $key ] ) : esc_html( $key );
+        $v      = is_array( $value ) ? esc_html( implode( ', ', $value ) ) : esc_html( (string) $value );
+        $border = ( $key === $last_key ) ? '' :
             'border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;';
+
         $answers_rows .= "
               <tr>
                 <td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
@@ -185,8 +221,13 @@ function quiz_send_admin_email(
               </tr>";
     }
 
-    $rows = quiz_email_header( 'New Outsourcing Assessment',
-                esc_html( $fullname ) . ' &mdash; ' . esc_html( $company ) ) . "
+    $contact_rows = quiz_email_contact_card( $fullname, $email, $phone, $company );
+
+    $rows =
+        quiz_email_header(
+            'New Outsourcing Assessment',
+            esc_html( $fullname ) . ' &mdash; ' . esc_html( $company )
+        ) . "
 
         <!-- CONTACT INFORMATION -->
         <tr>
@@ -196,42 +237,12 @@ function quiz_send_admin_email(
                       font-family:Arial,Helvetica,sans-serif;'>Contact Information</p>
             <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
                    style='background-color:#162848;border-radius:10px;'>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Full Name</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;
-                             border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#ffffff;font-weight:700;
-                          font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $fullname ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Email</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;
-                             border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#54c8ef;
-                          font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $email ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Phone</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;
-                             border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:#1e3558;'>
-                <p style='margin:0;font-size:14px;color:#d9e8f5;
-                          font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $phone ) . "</p>
-              </td></tr>
-              <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
-                <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Company</p>
-              </td></tr>
-              <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;'>
-                <p style='margin:0;font-size:14px;color:#ffffff;font-weight:700;
-                          font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $company ) . "</p>
-              </td></tr>
+              {$contact_rows}
             </table>
           </td>
         </tr>
 
-        <!-- RESULT BADGE WITH SCORE -->
+        <!-- RESULT BADGE + SCORE -->
         <tr>
           <td style='padding-top:20px;padding-left:40px;padding-right:40px;padding-bottom:0;'>
             <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
@@ -252,8 +263,8 @@ function quiz_send_admin_email(
                   <p style='margin:0;margin-bottom:4px;font-size:10px;font-weight:700;
                              letter-spacing:0.12em;text-transform:uppercase;text-align:right;
                              color:#54c8ef;font-family:Arial,Helvetica,sans-serif;'>Score</p>
-                  <p style='margin:0;font-size:28px;font-weight:800;color:#ffffff;text-align:right;
-                             font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $score ) . "</p>
+                  <p style='margin:0;font-size:28px;font-weight:800;color:#ffffff;
+                             text-align:right;font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $score ) . "</p>
                 </td>
               </tr>
             </table>
@@ -273,11 +284,11 @@ function quiz_send_admin_email(
           </td>
         </tr>" .
 
-    quiz_email_footer(
-        'Submitted via the Outsourcing Readiness Assessment &mdash; ' .
-        'Reply to respond to <strong style=\'color:#d9e8f5;\'>' . esc_html( $fullname ) . '</strong> ' .
-        'at <strong style=\'color:#54c8ef;\'>' . esc_html( $email ) . '</strong>.'
-    );
+        quiz_email_footer(
+            'Submitted via the Outsourcing Readiness Assessment &mdash; ' .
+            'Reply to respond to <strong style=\'color:#d9e8f5;\'>' . esc_html( $fullname ) . '</strong> ' .
+            'at <strong style=\'color:#54c8ef;\'>' . esc_html( $email ) . '</strong>.'
+        );
 
     $body    = quiz_email_shell( $rows );
     $headers = quiz_build_headers( $reply_to, QUIZ_ADMIN_CC, QUIZ_ADMIN_BCC );
@@ -287,10 +298,11 @@ function quiz_send_admin_email(
 
 
 // ── User results email ────────────────────────────────────────────────────────
-// Sent to the submitter (with admin CC'd automatically).
-// Contains: tier result + description, insights, goal, CTA buttons, PDF attached.
-// CTA buttons link to /wp-json/scorecard/v1/cta — triggers quiz_send_cta_email()
-// on click (same as popup buttons). No page redirect.
+// Sent to BOTH the submitter and the admin list as two separate wp_mail() calls.
+// Sending separately (not CC) ensures reliable delivery via WP Mail SMTP.
+//
+// User receives:  To:  submitter,  Reply-To: submitter
+// Admin receives: To:  admin list, Reply-To: submitter (so admin can reply to lead)
 
 function quiz_send_user_email(
     string $fullname,
@@ -300,14 +312,14 @@ function quiz_send_user_email(
     string $goal_line,
     string $goal_answer,
     array  $insights,
-    array  $ctas        = [],   // [{label, action}] from tier — 'download' excluded
-    string $pdf_base64  = '',   // Results PDF as base64 for attachment
+    array  $ctas         = [],
+    string $pdf_base64   = '',
     string $pdf_filename = 'Magellan-Readiness-Results.pdf'
 ): bool {
     $subject = 'Your Outsourcing Readiness Results — Magellan Solutions';
 
-    // ── Insights section ──────────────────────────────────────────────────────
-    $insights_html    = '';
+    // ── Insights ──────────────────────────────────────────────────────────────
+    $insights_html = '';
     foreach ( $insights as $msg ) {
         $insights_html .= "<li style='margin-bottom:8px;font-size:13px;color:#d9e8f5;"
             . "line-height:1.65;font-family:Arial,Helvetica,sans-serif;'>"
@@ -329,7 +341,7 @@ function quiz_send_user_email(
           </td>
         </tr>" : '';
 
-    // ── Goal section ──────────────────────────────────────────────────────────
+    // ── Goal ──────────────────────────────────────────────────────────────────
     $goal_display = $goal_answer
         ? 'Since your primary goal is <strong style="color:#54c8ef;">'
             . esc_html( $goal_answer ) . '</strong>, ' . esc_html( $goal_line )
@@ -346,15 +358,13 @@ function quiz_send_user_email(
               <tr><td style='padding-top:16px;padding-bottom:16px;
                              padding-left:20px;padding-right:20px;'>
                 <p style='margin:0;font-size:13px;color:#d9e8f5;line-height:1.7;
-                          font-family:Arial,Helvetica,sans-serif;'>
-                  {$goal_display}
-                </p>
+                          font-family:Arial,Helvetica,sans-serif;'>{$goal_display}</p>
               </td></tr>
             </table>
           </td>
         </tr>" : '';
 
-    // ── Note section ──────────────────────────────────────────────────────────
+    // ── Note ──────────────────────────────────────────────────────────────────
     $note_section = "
         <tr>
           <td style='padding-top:16px;padding-left:40px;padding-right:40px;padding-bottom:0;'>
@@ -374,29 +384,25 @@ function quiz_send_user_email(
           </td>
         </tr>";
 
-    // ── CTA buttons section ───────────────────────────────────────────────────
-    // Each button POSTs to /wp-json/scorecard/v1/cta (via signed token GET).
-    // Clicking sends quiz_send_cta_email() to admin — same as popup buttons.
-    // No page redirect occurs. Returns JSON {success, action}.
+    // ── CTA buttons ───────────────────────────────────────────────────────────
     $cta_section = '';
     if ( ! empty( $ctas ) ) {
         $btn_html = '';
         foreach ( $ctas as $cta ) {
-            $cta_lbl    = esc_html( $cta['label']  ?? '' );
-            $cta_act    = sanitize_text_field( $cta['action'] ?? '' );
-            if ( ! $cta_lbl || ! $cta_act ) continue;
+            $lbl = esc_html( $cta['label']  ?? '' );
+            $act = sanitize_text_field( $cta['action'] ?? '' );
+            if ( ! $lbl || ! $act ) continue;
 
-            $is_primary = ( $cta_act === 'schedule' );
-            $btn_bg     = $is_primary ? '#54c8ef' : 'transparent';
-            $btn_color  = $is_primary ? '#0f1f3d' : '#54c8ef';
+            $primary   = ( $act === 'schedule' );
+            $btn_bg    = $primary ? '#54c8ef' : 'transparent';
+            $btn_color = $primary ? '#0f1f3d' : '#54c8ef';
 
-            // Signed token prevents abuse — server validates before sending email
-            $token = quiz_cta_token( $cta_act, $email, $tier );
-            $href  = rest_url( 'scorecard/v1/cta' ) . '?' . http_build_query( [
-                'action'  => $cta_act,
+            $token = quiz_cta_token( $act, $email, $tier );
+            $href  = rest_url( 'outsourcing-scorecard/v1/cta' ) . '?' . http_build_query( [
+                'action'  => $act,
                 'email'   => $email,
                 'name'    => $fullname,
-                'phone'   => '',   // phone not stored in token context
+                'phone'   => '',
                 'company' => $company,
                 'tier'    => $tier,
                 'token'   => $token,
@@ -410,7 +416,7 @@ function quiz_send_user_email(
                   stroke='true' strokecolor='#54c8ef' fillcolor='{$btn_bg}'>
                   <w:anchorlock/>
                   <center style='color:{$btn_color};font-family:Arial,sans-serif;
-                                  font-size:13px;font-weight:700;'>{$cta_lbl}</center>
+                                  font-size:13px;font-weight:700;'>{$lbl}</center>
                 </v:roundrect>
                 <![endif]-->
                 <!--[if !mso]><!-->
@@ -420,11 +426,10 @@ function quiz_send_user_email(
                           display:inline-block;font-family:Arial,Helvetica,sans-serif;
                           font-size:13px;font-weight:700;padding-top:12px;padding-bottom:12px;
                           padding-left:24px;padding-right:24px;text-decoration:none;
-                          -webkit-text-size-adjust:none;mso-hide:all;'>{$cta_lbl}</a>
+                          -webkit-text-size-adjust:none;mso-hide:all;'>{$lbl}</a>
                 <!--<![endif]-->
               </td>";
         }
-
         if ( $btn_html ) {
             $cta_section = "
         <tr>
@@ -444,11 +449,12 @@ function quiz_send_user_email(
         }
     }
 
-    // ── Assemble body ─────────────────────────────────────────────────────────
-    $rows = quiz_email_header(
-        'Magellan Solutions: Outsourcing Scorecard',
-        esc_html( $company ). ' - Outsourcing Readiness'
-    ) . "
+    // ── Assemble HTML body ────────────────────────────────────────────────────
+    $rows =
+        quiz_email_header(
+            'Magellan Solutions: Outsourcing Scorecard',
+            esc_html( $company ) . ' &mdash; Outsourcing Readiness Results'
+        ) . "
 
         <!-- INTRO -->
         <tr>
@@ -501,51 +507,56 @@ function quiz_send_user_email(
         {$note_section}
         {$cta_section}" .
 
-    quiz_email_footer(
-        'You are receiving this because you completed the Outsourcing Readiness Assessment.<br>
-         If you did not submit this form, please ignore this email.'
-    );
+        quiz_email_footer(
+            'You are receiving this because you completed the Outsourcing Readiness Assessment.<br>
+             If you did not submit this form, please ignore this email.'
+        );
 
     $body = quiz_email_shell( $rows );
 
-    // ── CC admin list on user email ───────────────────────────────────────────
-    $admin_list = quiz_split_addresses( QUIZ_ADMIN_TO );
-    $cc_list    = quiz_split_addresses( QUIZ_USER_CC );
-    foreach ( $admin_list as $addr ) {
-        if ( strtolower( $addr ) !== strtolower( $email )
-             && ! in_array( strtolower( $addr ), array_map( 'strtolower', $cc_list ), true ) ) {
-            $cc_list[] = $addr;
-        }
-    }
-
-    $cc_string = implode( ', ', $cc_list );
-    $headers   = quiz_build_headers( $email, $cc_string, QUIZ_USER_BCC );
-
-    // ── Attach Results PDF ────────────────────────────────────────────────────
+    // ── PDF attachment ────────────────────────────────────────────────────────
     $attachments = [];
     if ( ! empty( $pdf_base64 ) ) {
-        $tmp_file = get_temp_dir() . sanitize_file_name( $pdf_filename );
-        $decoded  = base64_decode( $pdf_base64, true );
-        if ( $decoded !== false && file_put_contents( $tmp_file, $decoded ) !== false ) {
-            $attachments[] = $tmp_file;
+        $tmp  = get_temp_dir() . sanitize_file_name( $pdf_filename );
+        $data = base64_decode( $pdf_base64, true );
+        if ( $data !== false && file_put_contents( $tmp, $data ) !== false ) {
+            $attachments[] = $tmp;
         }
     }
 
-    $sent = wp_mail( $email, $subject, $body, $headers, $attachments );
+    // ── Send 1: To the submitter ──────────────────────────────────────────────
+    $user_headers = quiz_build_headers( $email, QUIZ_USER_CC, QUIZ_USER_BCC );
+    $user_sent    = wp_mail( $email, $subject, $body, $user_headers, $attachments );
 
+    // ── Send 2: To each admin (same body, so admin sees what the user sees) ───
+    // Sent as a fresh To-addressed email — CC is unreliable via WP Mail SMTP.
+    // Reply-To points to the submitter so admin can reply directly to the lead.
+    $admin_list = quiz_split_addresses( QUIZ_ADMIN_TO );
+    $admin_to   = array_values( array_filter( $admin_list, function ( $addr ) use ( $email ) {
+        return strtolower( trim( $addr ) ) !== strtolower( trim( $email ) );
+    } ) );
+
+    if ( ! empty( $admin_to ) ) {
+        $admin_subject = "[Copy] {$subject}";
+        $admin_headers = quiz_build_headers( $email, QUIZ_ADMIN_CC, QUIZ_ADMIN_BCC );
+        wp_mail( $admin_to, $admin_subject, $body, $admin_headers, $attachments );
+    }
+
+    // Clean up temp PDF file
     if ( ! empty( $attachments ) && file_exists( $attachments[0] ) ) {
         wp_delete_file( $attachments[0] );
     }
 
-    return $sent;
+    return $user_sent;
 }
 
 
 // ── CTA contact-details email ─────────────────────────────────────────────────
-// Sent to admin only when a CTA button is clicked — from the popup OR the email.
-// Contains: contact details only (q16 group). No quiz answers.
-// Subject:  "Request for a Discovery Call"  (schedule)
-//           "Consultation for <tier>"        (consult)
+// Sent to admin only — triggered by popup CTA buttons OR email CTA buttons.
+// Contains contact details only (no quiz answers).
+// Subjects:
+//   schedule → "Request for a Discovery Call"
+//   consult  → "Consultation for <tier>"
 
 function quiz_send_cta_email(
     string $fullname,
@@ -568,10 +579,10 @@ function quiz_send_cta_email(
         $cta_label = 'Book a Consultation';
     }
 
-    $rows = quiz_email_header(
-        esc_html( $cta_label ),
-        esc_html( $subject )
-    ) . "
+    $contact_rows = quiz_email_contact_card( $fullname, $email, $phone, $company );
+
+    $rows =
+        quiz_email_header( esc_html( $cta_label ), esc_html( $subject ) ) . "
 
         <!-- RESULT BADGE -->
         <tr>
@@ -601,6 +612,33 @@ function quiz_send_cta_email(
                       font-family:Arial,Helvetica,sans-serif;'>Contact Details</p>
             <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'
                    style='background-color:#162848;border-radius:10px;'>
+              {$contact_rows}
+            </table>
+          </td>
+        </tr>" .
+
+        quiz_email_footer(
+            'This lead clicked <strong style=\'color:#54c8ef;\'>' . esc_html( $cta_label ) . '</strong> '
+            . 'after completing the Outsourcing Readiness Assessment.'
+        );
+
+    $body    = quiz_email_shell( $rows );
+    $headers = quiz_build_headers( $email, QUIZ_ADMIN_CC, QUIZ_ADMIN_BCC );
+
+    return wp_mail( $to_list, $subject, $body, $headers );
+}
+
+
+// ── Contact card rows (shared by admin + CTA emails) ─────────────────────────
+// Returns the inner <tr> rows for Full Name / Email / Phone / Company.
+
+function quiz_email_contact_card(
+    string $fullname,
+    string $email,
+    string $phone,
+    string $company
+): string {
+    return "
               <tr><td style='padding-top:12px;padding-left:18px;padding-right:18px;padding-bottom:2px;'>
                 <p style='margin:0;font-size:11px;color:#7aadcc;font-family:Arial,Helvetica,sans-serif;'>Full Name</p>
               </td></tr>
@@ -631,18 +669,5 @@ function quiz_send_cta_email(
               <tr><td style='padding-top:0;padding-left:18px;padding-right:18px;padding-bottom:12px;'>
                 <p style='margin:0;font-size:14px;color:#ffffff;font-weight:700;
                           font-family:Arial,Helvetica,sans-serif;'>" . esc_html( $company ) . "</p>
-              </td></tr>
-            </table>
-          </td>
-        </tr>" .
-
-    quiz_email_footer(
-        'This lead clicked <strong style=\'color:#54c8ef;\'>' . esc_html( $cta_label ) . '</strong> '
-        . 'after completing the Outsourcing Readiness Assessment.'
-    );
-
-    $body    = quiz_email_shell( $rows );
-    $headers = quiz_build_headers( $email, QUIZ_ADMIN_CC, QUIZ_ADMIN_BCC );
-
-    return wp_mail( $to_list, $subject, $body, $headers );
+              </td></tr>";
 }

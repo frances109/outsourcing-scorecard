@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-    root: '.',
+    root:      '.',
     publicDir: 'public',
-    base: '/scorecard/',
+    base:      '/outsourcing-scorecard/',
     build: {
-        outDir: 'dist',
+        outDir:      'dist',
         emptyOutDir: true,
     },
 });

@@ -1,12 +1,13 @@
 <?php
 /**
- * Outsourcing Quiz — WordPress REST API Endpoint
+ * WordPress REST API endpoint for the Outsourcing Scorecard.
  *
- * Drop this file into: /wp-content/mu-plugins/quiz-endpoint.php
- * (create the mu-plugins folder if it doesn't exist)
- * It auto-loads — no activation needed.
+ * Drop BOTH files into: /wp-content/mu-plugins/
+ *   - quiz-endpoint.php      (this file — routing, validation, data handling)
+ *   - quiz-email-builder.php (email HTML construction and delivery)
  *
- * Endpoint: POST /wp-json/scorecard/v1/submit
+ * Endpoint: POST /wp-json/outsourcing-scorecard/v1/submit
+ * CTA URL:  GET  /wp-json/outsourcing-scorecard/v1/cta
  *
  * Required plugins:
  *   - WP Mail SMTP  (handles email delivery)
@@ -21,11 +22,12 @@
 define('QUIZ_RECAPTCHA_SECRET', 'your-recaptcha-v3-secret-key');
 
 // ── Admin notification email ──────────────────────────────────────────────────
-// Who receives an email on every quiz submission.
+// Receives: (1) full answers + score email, AND (2) the same results email
+// the user sees — sent as two separate emails for reliable delivery.
 // Separate multiple addresses with commas.
 
 define('QUIZ_ADMIN_TO',       'admin@yourdomain.com, manager@yourdomain.com');
-define('QUIZ_ADMIN_CC',       '');   // optional, e.g. 'sales@yourdomain.com, support@yourdomain.com'
+define('QUIZ_ADMIN_CC',       '');   // optional
 define('QUIZ_ADMIN_BCC',      '');   // optional
 
 // Reply-To on the admin notification.
@@ -39,10 +41,9 @@ define('QUIZ_ADMIN_REPLY_TO', '');
 define('QUIZ_USER_CC',  '');   // optional
 define('QUIZ_USER_BCC', '');   // optional
 
-// ── CTA buttons in the user results email ────────────────────────────────────
-// The "Next Steps" buttons in the user results email call quiz_send_cta_email()
-// via the /wp-json/scorecard/v1/cta REST endpoint — identical behaviour to the
-// popup CTA buttons. No page redirect. Returns JSON {success, action}.
+// ── CTA buttons in the results email ─────────────────────────────────────────
+// Clicking a CTA button in the email calls quiz_send_cta_email() server-side
+// (same as the popup buttons). No page redirect. Returns JSON {success, action}.
 
 // =============================================================================
 // END OF CONFIGURATION — do not edit below this line
@@ -101,39 +102,40 @@ function quiz_q14_label( string $value ): string {
 
 
 // ── Address helper ────────────────────────────────────────────────────────────
- 
+
 function quiz_split_addresses( string $raw ): array {
     if ( trim( $raw ) === '' ) return [];
     return array_values( array_filter( array_map( 'trim', explode( ',', $raw ) ) ) );
 }
- 
- 
-// ── Register REST route ───────────────────────────────────────────────────────
- 
+
+
+// ── Register REST routes ──────────────────────────────────────────────────────
+
 add_action( 'rest_api_init', function () {
-    // Main submission endpoint (POST)
-    register_rest_route( 'scorecard/v1', '/submit', [
+
+    // Main form submission
+    register_rest_route( 'outsourcing-scorecard/v1', '/submit', [
         'methods'             => 'POST',
         'callback'            => 'quiz_handle_submission',
         'permission_callback' => '__return_true',
     ] );
 
-    // Email CTA click endpoint (GET) — triggered when user clicks a button in their results email.
-    // URL format: /wp-json/scorecard/v1/cta?action=schedule&email=...&name=...&company=...&tier=...&token=...
-    register_rest_route( 'scorecard/v1', '/cta', [
+    // Email CTA button click — same action as popup CTA, no page redirect
+    register_rest_route( 'outsourcing-scorecard/v1', '/cta', [
         'methods'             => 'GET',
         'callback'            => 'quiz_handle_email_cta',
         'permission_callback' => '__return_true',
     ] );
+
 } );
 
 
-// ── Email CTA click handler ───────────────────────────────────────────────────
-// Called when the user clicks a CTA button inside their results email.
-// Validates a signed token and calls quiz_send_cta_email() — the exact same
-// function the popup CTA buttons use. Returns JSON only; no page redirect.
+// ── Email CTA handler ─────────────────────────────────────────────────────────
+// Triggered when user clicks a "Next Steps" button inside the results email.
+// Validates a signed HMAC token, then calls quiz_send_cta_email() — the exact
+// same function triggered by popup CTA buttons. Returns JSON; no redirect.
 
-function quiz_handle_email_cta( WP_REST_Request $request ) {
+function quiz_handle_email_cta( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     $action  = sanitize_text_field( $request->get_param( 'action' )  ?? '' );
     $email   = sanitize_email(      $request->get_param( 'email' )   ?? '' );
     $name    = sanitize_text_field( $request->get_param( 'name' )    ?? '' );
@@ -142,129 +144,119 @@ function quiz_handle_email_cta( WP_REST_Request $request ) {
     $tier    = sanitize_text_field( $request->get_param( 'tier' )    ?? '' );
     $token   = sanitize_text_field( $request->get_param( 'token' )   ?? '' );
 
-    // Validate the signed token to prevent abuse
     $expected = quiz_cta_token( $action, $email, $tier );
     if ( ! hash_equals( $expected, $token ) ) {
         return new WP_Error( 'invalid_token', 'Invalid or expired token.', [ 'status' => 403 ] );
     }
 
-    // Send the CTA email to admin — exactly the same as clicking popup CTA buttons.
-    // No page redirect — buttons in email only trigger the email, same as the popup.
     $sent = quiz_send_cta_email( $name, $email, $phone, $company, $tier, $action );
 
-    return rest_ensure_response( [
-        'success' => $sent,
-        'action'  => $action,
-    ] );
+    return rest_ensure_response( [ 'success' => $sent, 'action' => $action ] );
 }
 
 /**
- * Generate a signed token for an email CTA link.
- * Uses WordPress auth keys so tokens are site-specific.
+ * Generate a signed HMAC token for email CTA links.
+ * Ties the token to the action, email, and tier so it cannot be reused
+ * for a different action or a different user.
  */
 function quiz_cta_token( string $action, string $email, string $tier ): string {
-    return hash_hmac( 'sha256', "{$action}|{$email}|{$tier}", wp_salt('auth') );
+    return hash_hmac( 'sha256', "{$action}|{$email}|{$tier}", wp_salt( 'auth' ) );
 }
 
 
-// ── Main handler ──────────────────────────────────────────────────────────────
- 
-function quiz_handle_submission( WP_REST_Request $request ) {
+// ── Main form submission handler ──────────────────────────────────────────────
+
+function quiz_handle_submission( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     $data = $request->get_json_params();
- 
+
     // 1. Validate reCAPTCHA
     $token  = sanitize_text_field( $data['recaptcha_token'] ?? '' );
     $result = quiz_verify_recaptcha( $token );
- 
+
     if ( empty( $result['success'] ) ) {
         return new WP_Error( 'recaptcha_failed', 'reCAPTCHA verification failed.', [ 'status' => 403 ] );
     }
     if ( isset( $result['score'] ) && $result['score'] < 0.5 ) {
         return new WP_Error( 'recaptcha_score', 'reCAPTCHA score too low.', [ 'status' => 403 ] );
     }
- 
-    // 2. Sanitize all fields
-    $fullname  = sanitize_text_field( $data['fullname']  ?? '' );
-    $email     = sanitize_email( $data['email']          ?? '' );
-    $phone     = sanitize_text_field( $data['phone']     ?? '' );
-    $company   = sanitize_text_field( $data['company']   ?? '' );
-    $tier      = sanitize_text_field( $data['tier']      ?? '' );
-    $tier_body = sanitize_textarea_field( $data['tier_body'] ?? '' );
-    $goal_line = sanitize_textarea_field( $data['goal_line'] ?? '' );
-    $score     = intval( $data['score']                  ?? 0 );
-    $answers   = is_array( $data['answers']  ?? null ) ? $data['answers']  : [];
-    $insights  = is_array( $data['insights'] ?? null )
-        ? array_map( 'sanitize_text_field', $data['insights'] )
-        : [];
-    $ctas         = is_array( $data['ctas'] ?? null )
-        ? $data['ctas']
-        : [];
+
+    // 2. Sanitize fields
+    $fullname     = sanitize_text_field( $data['fullname']     ?? '' );
+    $email        = sanitize_email( $data['email']             ?? '' );
+    $phone        = sanitize_text_field( $data['phone']        ?? '' );
+    $company      = sanitize_text_field( $data['company']      ?? '' );
+    $tier         = sanitize_text_field( $data['tier']         ?? '' );
+    $tier_body    = sanitize_textarea_field( $data['tier_body']  ?? '' );
+    $goal_line    = sanitize_textarea_field( $data['goal_line']  ?? '' );
+    $score        = intval( $data['score']                     ?? 0 );
+    $answers      = is_array( $data['answers']  ?? null ) ? $data['answers']  : [];
+    $insights     = is_array( $data['insights'] ?? null )
+                        ? array_map( 'sanitize_text_field', $data['insights'] )
+                        : [];
+    $ctas         = is_array( $data['ctas']     ?? null ) ? $data['ctas']     : [];
     $pdf_base64   = sanitize_text_field( $data['pdf_base64']   ?? '' );
-    $pdf_filename = sanitize_file_name(  $data['pdf_filename'] ?? 'Magellan-Readiness-Results.pdf' );
- 
+    $pdf_filename = sanitize_file_name( $data['pdf_filename']  ?? 'Magellan-Readiness-Results.pdf' );
+
     if ( ! $fullname || ! is_email( $email ) || ! $company ) {
         return new WP_Error( 'missing_fields', 'Required fields are missing.', [ 'status' => 400 ] );
     }
- 
-    $is_cta    = ! empty( $data['is_cta'] );
+
+    // 3. Route: CTA popup click vs full quiz submission
+    $is_cta     = ! empty( $data['is_cta'] );
     $cta_action = sanitize_text_field( $answers['cta_action'] ?? '' );
 
     if ( $is_cta ) {
-        // CTA click: send contact-details-only email to admin with CTA-specific subject
+        // Popup CTA click — send contact-details-only email to admin
         $admin_sent = quiz_send_cta_email( $fullname, $email, $phone, $company, $tier, $cta_action );
         $user_sent  = false;
-        // No Flamingo save for CTA clicks (already saved on initial submit)
-    } else {
-        // Full quiz submission: send both admin full-answers email + user results email
-        $admin_sent = quiz_send_admin_email( $fullname, $email, $phone, $company, $tier, $score, $answers );
-        $goal_answer = quiz_q14_label( sanitize_text_field( $data['goal_answer'] ?? '' ) );
-        $user_sent  = quiz_send_user_email( $fullname, $email, $tier, $tier_body, $goal_line, $goal_answer, $insights, $ctas, $pdf_base64, $pdf_filename );
 
-        // 4. Save to Flamingo
+    } else {
+        // Full quiz submission — send admin notification + user results
+        $goal_answer = quiz_q14_label( sanitize_text_field( $data['goal_answer'] ?? '' ) );
+
+        // (a) Admin gets full-answers notification
+        $admin_sent = quiz_send_admin_email( $fullname, $email, $phone, $company, $tier, $score, $answers );
+
+        // (b) User gets results email; admin also receives a copy (see quiz_send_user_email)
+        $user_sent  = quiz_send_user_email(
+            $fullname, $email, $tier, $tier_body, $goal_line,
+            $goal_answer, $insights, $ctas, $pdf_base64, $pdf_filename
+        );
+
+        // (c) Save to Flamingo
         quiz_save_to_flamingo( $fullname, $email, $phone, $company, $tier, $tier_body, $score, $answers, $insights );
     }
- 
+
     return rest_ensure_response( [
         'success'    => true,
         'admin_sent' => $admin_sent,
         'user_sent'  => $user_sent,
     ] );
 }
- 
- 
+
+
 // ── reCAPTCHA v3 verification ─────────────────────────────────────────────────
- 
+
 function quiz_verify_recaptcha( string $token ): array {
     if ( empty( $token ) ) return [ 'success' => false ];
- 
+
     $response = wp_remote_post( 'https://www.google.com/recaptcha/api/siteverify', [
         'body' => [
             'secret'   => QUIZ_RECAPTCHA_SECRET,
             'response' => $token,
         ],
     ] );
- 
+
     if ( is_wp_error( $response ) ) return [ 'success' => false ];
- 
+
     return json_decode( wp_remote_retrieve_body( $response ), true ) ?? [ 'success' => false ];
 }
- 
- 
-
- 
-
-
-
-
- 
- 
-
 
 
 // ── Save to Flamingo ──────────────────────────────────────────────────────────
-// Inserts directly into Flamingo's 'flamingo_inbound' custom post type.
-// This works without CF7 active and without any Flamingo helper functions.
- 
+// Writes directly to Flamingo's flamingo_inbound CPT.
+// Works without Contact Form 7 active.
+
 function quiz_save_to_flamingo(
     string $fullname,
     string $email,
@@ -278,8 +270,7 @@ function quiz_save_to_flamingo(
 ): void {
     $labels = quiz_field_labels();
     $skip   = [ 'fullname', 'email', 'phone', 'company', 'score', 'tier' ];
- 
-    // Build ordered fields with human-readable labels
+
     $ordered_fields = [
         'Full Name'          => $fullname,
         'Email'              => $email,
@@ -290,7 +281,7 @@ function quiz_save_to_flamingo(
         'Score'              => (string) $score,
         'Key Insights'       => implode( ' | ', $insights ),
     ];
- 
+
     foreach ( $labels as $key => $label ) {
         if ( in_array( $key, $skip, true ) ) continue;
         if ( array_key_exists( $key, $answers ) ) {
@@ -300,7 +291,7 @@ function quiz_save_to_flamingo(
                 : (string) $value;
         }
     }
- 
+
     if ( post_type_exists( 'flamingo_inbound' ) ) {
         $post_id = wp_insert_post( [
             'post_type'   => 'flamingo_inbound',
@@ -317,22 +308,20 @@ function quiz_save_to_flamingo(
                 '_spam'       => false,
             ],
         ] );
- 
-        // Also store each field as individual post meta for Flamingo's detail view
+
         if ( $post_id && ! is_wp_error( $post_id ) ) {
             foreach ( $ordered_fields as $label => $value ) {
                 add_post_meta( $post_id, sanitize_key( $label ), $value );
             }
         }
     } else {
-        // Flamingo not active — fall back to a private WP post
         quiz_save_as_post( $fullname, $email, $phone, $company, $tier, $score, $ordered_fields );
     }
 }
- 
- 
-// ── Fallback: save as a private WordPress post ────────────────────────────────
- 
+
+
+// ── Fallback: private WP post ─────────────────────────────────────────────────
+
 function quiz_save_as_post(
     string $fullname,
     string $email,
@@ -350,12 +339,12 @@ function quiz_save_as_post(
             'supports' => [ 'title', 'custom-fields' ],
         ] );
     }
- 
+
     $meta = [];
     foreach ( $ordered_fields as $label => $value ) {
         $meta[ '_quiz_' . sanitize_key( $label ) ] = $value;
     }
- 
+
     wp_insert_post( [
         'post_type'   => 'quiz_submission',
         'post_title'  => "{$fullname} — {$company}",
@@ -363,4 +352,3 @@ function quiz_save_as_post(
         'meta_input'  => $meta,
     ] );
 }
- 

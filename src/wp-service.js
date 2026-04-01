@@ -16,7 +16,7 @@ import { generateResultsPDFBase64 } from './pdf-builder.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const WP_ENDPOINT   = `${import.meta.env.VITE_WP_URL ?? ''}/wp-json/scorecard/v1/submit`;
+const WP_ENDPOINT   = `${import.meta.env.VITE_WP_URL ?? ''}/wp-json/outsourcing-scorecard/v1/submit`;
 const RECAPTCHA_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? '';
 
 // ── reCAPTCHA v3 ──────────────────────────────────────────────────────────────
@@ -117,7 +117,6 @@ export function sendSubmitEmails(formData, tier, insights, itiInstance) {
 
     // Generate personalised Results PDF and send as base64 to PHP for email attachment
     const pdfBase64 = generateResultsPDFBase64(formData, tier.title, tier.body, tier.goalLine, insights, itiInstance);
-
     // Build the submitter's full name for the PDF filename
     const fullname = formData.get('fullname') ?? '';
     const pdfFilename = fullname
