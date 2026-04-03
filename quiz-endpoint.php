@@ -254,7 +254,7 @@ function quiz_verify_recaptcha( string $token ): array {
 
 
 // ── Save to Flamingo ──────────────────────────────────────────────────────────
-// Writes to Flamingo's flamingo_inbound CPT and flamingo_contact CPT.
+// Saves to Flamingo's inbound messages AND address book.
 
 function quiz_save_to_flamingo(
     string $fullname,
@@ -267,14 +267,21 @@ function quiz_save_to_flamingo(
     array  $answers,
     array  $insights
 ): void {
-    if ( ! post_type_exists( 'flamingo_inbound' ) ) {
-        quiz_save_as_post( $fullname, $email, $phone, $company, $tier, $score, [] );
+
+    // Normalize
+    $email    = strtolower( trim( $email ) );
+    $fullname = trim( $fullname );
+
+    if ( empty( $email ) ) {
         return;
     }
 
     $labels = quiz_field_labels();
     $skip   = [ 'fullname', 'email', 'phone', 'company', 'score', 'tier' ];
 
+    // ─────────────────────────────────────────
+    // Build Ordered Fields
+    // ─────────────────────────────────────────
     $ordered_fields = [
         'Full Name'          => $fullname,
         'Email'              => $email,
@@ -288,80 +295,65 @@ function quiz_save_to_flamingo(
 
     foreach ( $labels as $key => $label ) {
         if ( in_array( $key, $skip, true ) ) continue;
+
         if ( array_key_exists( $key, $answers ) ) {
-            $value                    = $answers[ $key ];
+            $value = $answers[ $key ];
+
             $ordered_fields[ $label ] = is_array( $value )
                 ? implode( ', ', $value )
                 : (string) $value;
         }
     }
 
-    $subject      = "New Assessment — {$fullname} ({$company})";
-    $channel_name = 'Outsourcing Scorecard';
+    $subject = "New Assessment — {$fullname} ({$company})";
+    $channel = 'Outsourcing Scorecard';
 
-    // ── 1. Insert the inbound message ─────────────────────────────────────────
-    // '_from' is the combined "Name <email>" string — this is what Flamingo's
-    // list-table reads for the From column.
-    $post_id = wp_insert_post( [
-        'post_type'   => 'flamingo_inbound',
-        'post_title'  => $subject,
-        'post_status' => 'publish',
-        'meta_input'  => [
-            '_from'       => "{$fullname} <{$email}>",
-            '_from_name'  => $fullname,
-            '_from_email' => $email,
-            '_subject'    => $subject,
-            '_fields'     => $ordered_fields,
-            '_remote_ip'  => $_SERVER['REMOTE_ADDR']     ?? '',
-            '_user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-            '_spam'       => false,
-        ],
-    ] );
+    // ─────────────────────────────────────────
+    // 1. Inbound Message (FIXED)
+    // ─────────────────────────────────────────
+    if ( class_exists( 'Flamingo_Inbound_Message' ) ) {
 
-    if ( ! $post_id || is_wp_error( $post_id ) ) {
-        return;
-    }
-
-    // ── 2. Assign the channel taxonomy term ───────────────────────────────────
-    // The correct taxonomy name is 'flamingo_inbound_channel'.
-    $channel_taxonomy = 'flamingo_inbound_channel';
-    if ( taxonomy_exists( $channel_taxonomy ) ) {
-        $term = term_exists( $channel_name, $channel_taxonomy );
-        if ( ! $term ) {
-            $term = wp_insert_term( $channel_name, $channel_taxonomy );
-        }
-        if ( $term && ! is_wp_error( $term ) ) {
-            $term_id = is_array( $term ) ? (int) $term['term_id'] : (int) $term;
-            wp_set_post_terms( $post_id, [ $term_id ], $channel_taxonomy );
-        }
-    }
-
-    // ── 3. Upsert the address-book contact ────────────────────────────────────
-    // Flamingo stores contacts in 'flamingo_contact', keyed by '_email' meta.
-    if ( post_type_exists( 'flamingo_contact' ) && is_email( $email ) ) {
-        $existing = get_posts( [
-            'post_type'      => 'flamingo_contact',
-            'posts_per_page' => 1,
-            'meta_key'       => '_email',
-            'meta_value'     => $email,
-            'post_status'    => 'any',
-            'fields'         => 'ids',
+        Flamingo_Inbound_Message::add( [
+            'channel'    => $channel,
+            'subject'    => $subject,
+            'from'       => $fullname . ' <' . $email . '>',
+            'from_name'  => $fullname,
+            'from_email' => $email,
+            'fields'     => $ordered_fields,
+            'meta'       => [
+                'remote_ip'  => sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? '' ),
+                'user_agent' => sanitize_text_field( $_SERVER['HTTP_USER_AGENT'] ?? '' ),
+            ],
         ] );
 
-        if ( empty( $existing ) ) {
-            wp_insert_post( [
-                'post_type'   => 'flamingo_contact',
-                'post_title'  => $fullname,
-                'post_status' => 'publish',
-                'meta_input'  => [
-                    '_name'  => $fullname,
-                    '_email' => $email,
-                ],
-            ] );
-        }
+    } else {
+        // fallback if Flamingo not active
+        quiz_save_as_post( $fullname, $email, $phone, $company, $tier, $score, $ordered_fields );
+    }
+
+    // ─────────────────────────────────────────
+    // 2. Address Book (SAFE UPDATE)
+    // ─────────────────────────────────────────
+    if ( class_exists( 'Flamingo_Contact' ) ) {
+
+        $existing = Flamingo_Contact::search_by_email( $email );
+        $props    = $existing ? (array) $existing->props : [];
+
+        // Preserve + update
+        $props['company'] = $company ?: ( $props['company'] ?? '' );
+        $props['phone']   = $phone   ?: ( $props['phone'] ?? '' );
+        $props['tier']    = $tier;
+        $props['channel'] = $channel;
+
+        Flamingo_Contact::add( [
+            'email'          => $email,
+            'name'           => $fullname,
+            'props'          => $props,
+            'last_contacted' => current_time( 'mysql' ),
+            'channel'        => $channel, // optional but recommended
+        ] );
     }
 }
-
 
 // ── Fallback: private WP post ─────────────────────────────────────────────────
 
