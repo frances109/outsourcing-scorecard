@@ -254,8 +254,7 @@ function quiz_verify_recaptcha( string $token ): array {
 
 
 // ── Save to Flamingo ──────────────────────────────────────────────────────────
-// Writes directly to Flamingo's flamingo_inbound CPT.
-// Works without Contact Form 7 active.
+// Writes to Flamingo's flamingo_inbound CPT and flamingo_contact CPT.
 
 function quiz_save_to_flamingo(
     string $fullname,
@@ -268,6 +267,11 @@ function quiz_save_to_flamingo(
     array  $answers,
     array  $insights
 ): void {
+    if ( ! post_type_exists( 'flamingo_inbound' ) ) {
+        quiz_save_as_post( $fullname, $email, $phone, $company, $tier, $score, [] );
+        return;
+    }
+
     $labels = quiz_field_labels();
     $skip   = [ 'fullname', 'email', 'phone', 'company', 'score', 'tier' ];
 
@@ -292,30 +296,69 @@ function quiz_save_to_flamingo(
         }
     }
 
-    if ( post_type_exists( 'flamingo_inbound' ) ) {
-        $post_id = wp_insert_post( [
-            'post_type'   => 'flamingo_inbound',
-            'post_title'  => "New Assessment — {$fullname} ({$company})",
-            'post_status' => 'publish',
-            'meta_input'  => [
-                '_from_name'  => $fullname,
-                '_from_email' => $email,
-                '_subject'    => "New Assessment — {$fullname} ({$company})",
-                '_channel'    => 'Outsourcing Scorecard',
-                '_fields'     => $ordered_fields,
-                '_remote_ip'  => $_SERVER['REMOTE_ADDR']     ?? '',
-                '_user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-                '_spam'       => false,
-            ],
+    $subject      = "New Assessment — {$fullname} ({$company})";
+    $channel_name = 'Outsourcing Scorecard';
+
+    // ── 1. Insert the inbound message ─────────────────────────────────────────
+    // '_from' is the combined "Name <email>" string — this is what Flamingo's
+    // list-table reads for the From column.
+    $post_id = wp_insert_post( [
+        'post_type'   => 'flamingo_inbound',
+        'post_title'  => $subject,
+        'post_status' => 'publish',
+        'meta_input'  => [
+            '_from'       => "{$fullname} <{$email}>",
+            '_from_name'  => $fullname,
+            '_from_email' => $email,
+            '_subject'    => $subject,
+            '_fields'     => $ordered_fields,
+            '_remote_ip'  => $_SERVER['REMOTE_ADDR']     ?? '',
+            '_user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
+            '_spam'       => false,
+        ],
+    ] );
+
+    if ( ! $post_id || is_wp_error( $post_id ) ) {
+        return;
+    }
+
+    // ── 2. Assign the channel taxonomy term ───────────────────────────────────
+    // The correct taxonomy name is 'flamingo_inbound_channel'.
+    $channel_taxonomy = 'flamingo_inbound_channel';
+    if ( taxonomy_exists( $channel_taxonomy ) ) {
+        $term = term_exists( $channel_name, $channel_taxonomy );
+        if ( ! $term ) {
+            $term = wp_insert_term( $channel_name, $channel_taxonomy );
+        }
+        if ( $term && ! is_wp_error( $term ) ) {
+            $term_id = is_array( $term ) ? (int) $term['term_id'] : (int) $term;
+            wp_set_post_terms( $post_id, [ $term_id ], $channel_taxonomy );
+        }
+    }
+
+    // ── 3. Upsert the address-book contact ────────────────────────────────────
+    // Flamingo stores contacts in 'flamingo_contact', keyed by '_email' meta.
+    if ( post_type_exists( 'flamingo_contact' ) && is_email( $email ) ) {
+        $existing = get_posts( [
+            'post_type'      => 'flamingo_contact',
+            'posts_per_page' => 1,
+            'meta_key'       => '_email',
+            'meta_value'     => $email,
+            'post_status'    => 'any',
+            'fields'         => 'ids',
         ] );
 
-        if ( $post_id && ! is_wp_error( $post_id ) ) {
-            foreach ( $ordered_fields as $label => $value ) {
-                add_post_meta( $post_id, sanitize_key( $label ), $value );
-            }
+        if ( empty( $existing ) ) {
+            wp_insert_post( [
+                'post_type'   => 'flamingo_contact',
+                'post_title'  => $fullname,
+                'post_status' => 'publish',
+                'meta_input'  => [
+                    '_name'  => $fullname,
+                    '_email' => $email,
+                ],
+            ] );
         }
-    } else {
-        quiz_save_as_post( $fullname, $email, $phone, $company, $tier, $score, $ordered_fields );
     }
 }
 
